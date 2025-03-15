@@ -2,6 +2,7 @@ package hemlis
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,12 +18,25 @@ type Manager struct {
 	config        Config
 }
 
+// NameNormalization specifies how secret names should be normalized
+type NameNormalization int
+
+const (
+	// NoNormalization preserves the original name as-is
+	NoNormalization NameNormalization = iota
+	// LowerCase converts the name to lowercase
+	LowerCase
+	// UpperCase converts the name to uppercase
+	UpperCase
+)
+
 type Config struct {
-	AccessToken    string
-	OrganizationID string
-	IdentityURL    string
-	APIURL         string
-	CacheDuration  time.Duration
+	AccessToken       string
+	OrganizationID    string
+	IdentityURL       string
+	APIURL            string
+	CacheDuration     time.Duration
+	NameNormalization *NameNormalization
 }
 
 func New(cfg Config) (*Manager, error) {
@@ -52,10 +66,29 @@ func New(cfg Config) (*Manager, error) {
 	return mgr, nil
 }
 
+func (m *Manager) normalizeName(name string) string {
+	// If normalization is not set, use the name as is
+	if m.config.NameNormalization == nil {
+		return name
+	}
+
+	switch *m.config.NameNormalization {
+	case LowerCase:
+		return strings.ToLower(name)
+	case UpperCase:
+		return strings.ToUpper(name)
+	default:
+		return name
+	}
+}
+
 func (m *Manager) GetSecretByName(name string) (string, error) {
-	// try  to get uuid from map
+	// normalize the name according to configuration
+	normalizedName := m.normalizeName(name)
+	
+	// try to get uuid from map
 	m.mu.RLock()
-	uuid, exists := m.uuidMap[name]
+	uuid, exists := m.uuidMap[normalizedName]
 	m.mu.RUnlock()
 
 	if !exists {
@@ -66,7 +99,7 @@ func (m *Manager) GetSecretByName(name string) (string, error) {
 
 		// try again after refresh
 		m.mu.RLock()
-		uuid, exists = m.uuidMap[name]
+		uuid, exists = m.uuidMap[normalizedName]
 		m.mu.RUnlock()
 
 		if !exists {
@@ -140,7 +173,9 @@ func (m *Manager) refreshUUIDMap() error {
 
 	newMap := make(map[string]string, len(secrets.Data))
 	for _, secret := range secrets.Data {
-		newMap[secret.Key] = secret.ID
+		// store with normalized key based on configuration
+		normalizedKey := m.normalizeName(secret.Key)
+		newMap[normalizedKey] = secret.ID
 	}
 
 	m.mu.Lock()
